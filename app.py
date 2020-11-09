@@ -49,6 +49,19 @@ app.layout = html.Div(className="container-fluid", id="trade-main-div", children
     dbc.Table(id="gain-table", bordered=True, hover=True, responsive=True, striped=True)
 ])
 
+def checkKeyExistence(keyNum):
+    if not os.getenv("API_KEY" + keyNum):
+        return 0
+    else:
+        if not os.getenv("API_SECRET" + keyNum):
+            return 0
+        else:
+            return 1
+global flag2
+global flag3
+flag2 = checkKeyExistence('2')
+flag3 = checkKeyExistence('3')
+
 
 def calc_roe(row):
     # calulate Margin = current position size / leverage
@@ -162,11 +175,26 @@ def create_gain_line(balance, gain, gain_yesterday):
 def update_income_stats(n, store):
     bf = BinanceFuturesRequester(os.getenv("API_KEY"), os.getenv("API_SECRET"))
     income_data, used_weight = bf.get_income_data('REALIZED_PNL')
+    if flag2 == 1:
+        bf2 = BinanceFuturesRequester(os.getenv("API_KEY2"), os.getenv("API_SECRET2"))
+        income_data2, used_weight2 = bf2.get_income_data('REALIZED_PNL')
+        id_df2 = pd.DataFrame(income_data2.json())
+    if flag3 == 1:
+        bf3 = BinanceFuturesRequester(os.getenv("API_KEY3"), os.getenv("API_SECRET3"))
+        income_data3, used_weight3 = bf3.get_income_data('REALIZED_PNL')
+        id_df3 = pd.DataFrame(income_data3.json())        
 
     print("Income-Data call used weight: {} ({:.2%})".format(used_weight, int(used_weight) / 2400))
 
     # income data as frame...
     id_df = pd.DataFrame(income_data.json())
+
+    if flag2 == 1 & flag3 == 1:
+        id_df = pd.concat([id_df, id_df2, id_df3], ignore_index=True, sort=False)
+    elif flag2 == 1 & flag3 == 0:
+        id_df = pd.concat([id_df, id_df2], ignore_index=True, sort=False)
+    
+
     id_df["time2"] = id_df["time"].apply(lambda x: pd.to_datetime(x / 1000, unit='s', utc=True))
     id_df["date"] = id_df["time2"].dt.date
     id_df['income'] = id_df["income"].astype(float)
@@ -258,10 +286,27 @@ def update_income_stats(n, store):
 )
 def update_position_stats(n, reduceValue):
     bf = BinanceFuturesRequester(os.getenv("API_KEY"), os.getenv("API_SECRET"))
+    if flag2 == 1:
+        bf2 = BinanceFuturesRequester(os.getenv("API_KEY2"), os.getenv("API_SECRET2"))
+        userdata2, user_weight2 = bf2.get_position_risc()
+        balance_data2, balance_weight2 = bf2.get_balance()
+        method_weight2 = balance_weight2 + user_weight2        
+        print("Update-Current call used weight (acc2): {} ({:.2%})".format(method_weight2, int(method_weight2) / 2400))     
+    if flag3 == 1:
+        bf3 = BinanceFuturesRequester(os.getenv("API_KEY3"), os.getenv("API_SECRET3"))
+        userdata3, user_weight3 = bf3.get_position_risc()
+        balance_data3, balance_weight3 = bf3.get_balance()
+        method_weight3 = balance_weight3 + user_weight3
+        print("Update-Current call used weight (acc3): {} ({:.2%})".format(method_weight3, int(method_weight3) / 2400))   
     userdata, user_weight = bf.get_position_risc()
     balance_data, balance_weight = bf.get_balance()
 
     method_weight = balance_weight + user_weight
+    if flag2 == 1 & flag3 == 1:
+        method_weight = (method_weight + method_weight2 + method_weight3)/3
+    elif flag2 == 1 & flag3 == 0:
+        method_weight = (method_weight + method_weight2)/2
+
     print("Update-Current call used weight: {} ({:.2%})".format(method_weight, int(method_weight) / 2400))
     used_weight = " {} ({:.2%})".format(method_weight, int(method_weight) / 2400)
 
@@ -279,6 +324,39 @@ def update_position_stats(n, reduceValue):
         "isAutoAddMargin": bool,
         "positionSide": str
     })
+    if flag2 == 1:
+        ud_df2 = pd.DataFrame(userdata2.json()).astype({
+            "symbol": str,
+            "positionAmt": float,
+            "entryPrice": float,
+            "markPrice": float,
+            "unRealizedProfit": float,
+            "liquidationPrice": float,
+            "leverage": float,
+            "maxNotionalValue": float,
+            "marginType": str,
+            "isolatedMargin": bool,
+            "isAutoAddMargin": bool,
+            "positionSide": str
+        })
+        if flag3 == 0:
+            ud_df = pd.concat([ud_df, ud_df2], ignore_index=False)   
+        else:
+            ud_df3 = pd.DataFrame(userdata3.json()).astype({
+            "symbol": str,
+            "positionAmt": float,
+            "entryPrice": float,
+            "markPrice": float,
+            "unRealizedProfit": float,
+            "liquidationPrice": float,
+            "leverage": float,
+            "maxNotionalValue": float,
+            "marginType": str,
+            "isolatedMargin": bool,
+            "isAutoAddMargin": bool,
+            "positionSide": str
+            })
+            ud_df = pd.concat([ud_df, ud_df2, ud_df3], ignore_index=False)        
 
     total_pnl = 0
     total_margin = 0
@@ -296,6 +374,15 @@ def update_position_stats(n, reduceValue):
         # print(ud_df[['pnl', 'pnlPerc', 'redSuggestion']].head())
         balance_data = balance_data.json()[0]
         balance = float(balance_data['balance'])
+        if flag2 == 1:
+            balance_data2 = balance_data2.json()[0]
+            balance2 = float(balance_data2['balance'])
+            if flag3 == 1:
+                balance_data3 = balance_data3.json()[0]
+                balance3 = float(balance_data3['balance'])
+                balance = balance + balance2 + balance3
+            else:
+                balance = balance + balance2
         ud_df["walletAllocation"] = ud_df['markMargin'].apply(lambda x: (x / balance) if balance > 0 else 0)
         ud_df["walletDrain"] = ud_df['pnl'].apply(lambda x: (x / balance) if balance > 0 else 0)
         ud_df["dollarCost"] = ud_df[['positionAmt', 'entryPrice']].apply(lambda x: abs(x[0] * x[1]), axis=1)
